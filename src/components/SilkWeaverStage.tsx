@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import {
   CAMERA_CONSTRAINTS,
   DEFAULT_FLUID_TUNING,
@@ -30,6 +30,56 @@ interface ParameterHelpCopy {
   effect: string
 }
 
+interface ScreenPulse {
+  id: number
+  x: number
+  y: number
+  primary: string
+  secondary: string
+}
+
+interface HeartBurst {
+  id: number
+  x: number
+  y: number
+  color: string
+  size: number
+}
+
+interface GestureEffects {
+  fistPulse: boolean
+  snapHeart: boolean
+}
+
+type SnapAudioState = 'idle' | 'requesting' | 'ready' | 'denied' | 'error'
+
+interface AudioMonitor {
+  level: number
+  average: number
+  attack: number
+  transient: boolean
+  contextState: string
+}
+
+interface AudioThresholds {
+  level: number
+  average: number
+  attack: number
+  cooldownMs: number
+}
+
+interface AudioTrackInfo {
+  label: string
+  muted: boolean
+  enabled: boolean
+  readyState: string
+}
+
+interface AudioInputOption {
+  deviceId: string
+  label: string
+}
+
 interface LanguageCopy {
   brand: string
   status: Record<StageMessageKey, string>
@@ -48,6 +98,28 @@ interface LanguageCopy {
   tracking: {
     precision: string
     stable: string
+  }
+  effects: {
+    title: string
+    fistPulse: string
+    snapHeart: string
+    micStatus: Record<SnapAudioState, string>
+    meterLabel: string
+    transientReady: string
+    transientIdle: string
+    contextLabel: string
+    trackLabel: string
+    deviceLabel: string
+    devicePlaceholder: string
+    refreshDevices: string
+    thresholdTitle: string
+    thresholdLabels: {
+      level: string
+      average: string
+      attack: string
+      cooldownMs: string
+    }
+    heartSize: string
   }
   tuning: {
     kicker: string
@@ -93,6 +165,15 @@ const CONTROL_CONFIGS: Array<{
 
 const PARAMETER_ORDER: Array<keyof FluidTuning> = CONTROL_CONFIGS.map((item) => item.key)
 
+const DEFAULT_AUDIO_THRESHOLDS: AudioThresholds = {
+  level: 0.5,
+  average: 0.6,
+  attack: 0.05,
+  cooldownMs: 260,
+}
+
+const DEFAULT_HEART_BURST_SIZE = 5.6
+
 const COPY: Record<Language, LanguageCopy> = {
   zh: {
     brand: 'The Silk Weaver',
@@ -101,7 +182,7 @@ const COPY: Record<Language, LanguageCopy> = {
       booting: '正在启动 WebGL 丝绸场',
       camera: '正在请求镜像前置摄像头',
       model: '正在加载手部追踪模型',
-      ready: '挥动双手食指开始编织流场',
+      ready: '挥动双手开始编织流场',
       error: '启动失败',
     },
     statusPrefix: '错误：',
@@ -119,6 +200,34 @@ const COPY: Record<Language, LanguageCopy> = {
     tracking: {
       precision: '指尖',
       stable: '掌心/拳头',
+    },
+    effects: {
+      title: '动作特效',
+      fistPulse: '握拳丝结',
+      snapHeart: '响指爱心',
+      micStatus: {
+        idle: '开启响指爱心后会请求麦克风，只根据响指瞬态声音触发爱心。',
+        requesting: '正在请求麦克风权限...',
+        ready: '麦克风已连接。检测到清脆响指声时，会在当前掌心附近出现爱心。',
+        denied: '麦克风未授权，响指爱心目前不会触发。',
+        error: '麦克风初始化失败，响指爱心目前不可用。',
+      },
+      meterLabel: '响指音频输入',
+      transientReady: '已捕捉到爆裂瞬态',
+      transientIdle: '等待爆裂瞬态',
+      contextLabel: '音频上下文',
+      trackLabel: '输入轨道',
+      deviceLabel: '麦克风设备',
+      devicePlaceholder: '使用浏览器默认输入',
+      refreshDevices: '刷新设备',
+      thresholdTitle: '响指阈值',
+      thresholdLabels: {
+        level: '爆裂强度',
+        average: '环境噪声上限',
+        attack: '瞬态攻击',
+        cooldownMs: '触发冷却',
+      },
+      heartSize: '爱心大小',
     },
     tuning: {
       kicker: '实时调参',
@@ -154,6 +263,9 @@ const COPY: Record<Language, LanguageCopy> = {
         '允许摄像头权限，站在镜头前像照镜子一样操作。',
         '输入模式可切换为指尖精细模式，或更稳定的掌心/拳头模式。',
         '抬起双手并在空中移动，系统会把你当前模式对应的位置和速度注入流体。',
+        '可在调参面板中单独开启握拳丝结或响指爱心。',
+        '在掌心/拳头模式下，张开的手迅速握拳会触发一次高亮变色丝结，并带出一瞬屏幕扫光。',
+        '开启响指爱心后，只要检测到清脆的响指爆裂声，就会在当前最稳定的掌心附近放出一个爱心。',
         '打开鼠标模拟后，按住左键代表左手，按住右键代表右手。',
         '快挥会产生更强、更宽的丝带；慢挥会产生更柔和的线条。',
       ],
@@ -210,7 +322,7 @@ const COPY: Record<Language, LanguageCopy> = {
       booting: 'Booting WebGL silk field',
       camera: 'Requesting mirrored front camera',
       model: 'Loading hand landmark model',
-      ready: 'Move both index fingers to weave the field',
+      ready: 'Move both hands to weave the field',
       error: 'Startup failed',
     },
     statusPrefix: 'Error:',
@@ -228,6 +340,34 @@ const COPY: Record<Language, LanguageCopy> = {
     tracking: {
       precision: 'Precision',
       stable: 'Stable',
+    },
+    effects: {
+      title: 'Gesture FX',
+      fistPulse: 'Fist knot',
+      snapHeart: 'Snap heart',
+      micStatus: {
+        idle: 'Enabling snap heart will request microphone access and trigger hearts from the snap transient alone.',
+        requesting: 'Requesting microphone access...',
+        ready: 'Microphone connected. A clean snap transient will spawn a heart near the currently tracked palm.',
+        denied: 'Microphone access denied. Snap heart is currently disabled.',
+        error: 'Microphone setup failed. Snap heart is currently unavailable.',
+      },
+      meterLabel: 'Snap audio input',
+      transientReady: 'Transient captured',
+      transientIdle: 'Waiting for transient',
+      contextLabel: 'Audio context',
+      trackLabel: 'Input track',
+      deviceLabel: 'Microphone device',
+      devicePlaceholder: 'Use browser default input',
+      refreshDevices: 'Refresh devices',
+      thresholdTitle: 'Snap thresholds',
+      thresholdLabels: {
+        level: 'Burst level',
+        average: 'Noise ceiling',
+        attack: 'Transient attack',
+        cooldownMs: 'Cooldown',
+      },
+      heartSize: 'Heart size',
     },
     tuning: {
       kicker: 'Live tuning',
@@ -263,6 +403,9 @@ const COPY: Record<Language, LanguageCopy> = {
         'Allow camera access and face the preview like a mirror.',
         'Switch between fingertip precision mode and a more stable palm/fist mode.',
         'Move both hands through the air and the active mode will inject its tracked position and velocity into the field.',
+        'Use the tuning panel to enable the fist knot and snap heart effects independently.',
+        'In palm/fist mode, snapping an open hand into a fist triggers a bright color-shift silk knot with a brief screen flare.',
+        'With snap heart enabled, a clear snap transient alone is enough to release a heart near the currently tracked palm.',
         'With mouse simulation enabled, hold the left button for the left hand and the right button for the right hand.',
         'Fast gestures create stronger, wider ribbons; slower gestures produce softer silk lines.',
       ],
@@ -326,6 +469,26 @@ function formatTuningValue(key: keyof FluidTuning, value: number) {
   return key === 'vorticity' ? value.toFixed(0) : value.toFixed(3)
 }
 
+function isPreferredAudioInput(label: string) {
+  return !/virtual|虚拟|stereo mix|mix/i.test(label)
+}
+
+function getScreenPulseColors(handedness: TrackedHand['handedness']) {
+  return handedness === 'Left'
+    ? {
+        primary: 'rgba(255, 196, 142, 0.34)',
+        secondary: 'rgba(255, 128, 168, 0.16)',
+      }
+    : {
+        primary: 'rgba(142, 236, 255, 0.32)',
+        secondary: 'rgba(116, 184, 255, 0.17)',
+      }
+}
+
+function getHeartBurstColor(handedness: TrackedHand['handedness']) {
+  return handedness === 'Left' ? 'rgba(255, 170, 210, 0.95)' : 'rgba(255, 128, 190, 0.95)'
+}
+
 export function SilkWeaverStage() {
   const stageRef = useRef<HTMLElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -334,7 +497,22 @@ export function SilkWeaverStage() {
   const mouseSimulatorRef = useRef(new MouseHandSimulator())
   const mouseModeRef = useRef(false)
   const trackingModeRef = useRef<TrackingMode>('stable')
+  const gestureEffectsRef = useRef<GestureEffects>({
+    fistPulse: false,
+    snapHeart: true,
+  })
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const audioGainRef = useRef<GainNode | null>(null)
+  const audioProcessorRef = useRef<ScriptProcessorNode | null>(null)
+  const audioStreamRef = useRef<MediaStream | null>(null)
+  const audioThresholdsRef = useRef<AudioThresholds>({ ...DEFAULT_AUDIO_THRESHOLDS })
+  const lastAudioPeakRef = useRef(0)
+  const lastAudioTransientMsRef = useRef(0)
+  const trackedHandsForAudioRef = useRef<TrackedHand[]>([])
   const tuningRef = useRef<FluidTuning>({ ...DEFAULT_FLUID_TUNING })
+  const screenPulseIdRef = useRef(0)
+  const heartBurstIdRef = useRef(0)
+  const screenPulseTimeoutsRef = useRef<number[]>([])
   const [language, setLanguage] = useState<Language>('zh')
   const [stageState, setStageState] = useState<StageState>({
     mode: 'loading',
@@ -346,6 +524,34 @@ export function SilkWeaverStage() {
   const [trackingMode, setTrackingMode] = useState<TrackingMode>('stable')
   const [activePreset, setActivePreset] = useState<ActivePreset>('Silk')
   const [tuning, setTuning] = useState<FluidTuning>({ ...DEFAULT_FLUID_TUNING })
+  const [gestureEffects, setGestureEffects] = useState<GestureEffects>({
+    fistPulse: false,
+    snapHeart: true,
+  })
+  const [audioThresholds, setAudioThresholds] = useState<AudioThresholds>({
+    ...DEFAULT_AUDIO_THRESHOLDS,
+  })
+  const [snapAudioState, setSnapAudioState] = useState<SnapAudioState>('idle')
+  const [audioInputs, setAudioInputs] = useState<AudioInputOption[]>([])
+  const [selectedAudioInputId, setSelectedAudioInputId] = useState('')
+  const selectedAudioInputIdRef = useRef('')
+  const heartBurstSizeRef = useRef(DEFAULT_HEART_BURST_SIZE)
+  const [audioMonitor, setAudioMonitor] = useState<AudioMonitor>({
+    level: 0,
+    average: 0,
+    attack: 0,
+    transient: false,
+    contextState: 'idle',
+  })
+  const [audioTrackInfo, setAudioTrackInfo] = useState<AudioTrackInfo>({
+    label: '-',
+    muted: false,
+    enabled: false,
+    readyState: 'idle',
+  })
+  const [heartBurstSize, setHeartBurstSize] = useState(DEFAULT_HEART_BURST_SIZE)
+  const [screenPulses, setScreenPulses] = useState<ScreenPulse[]>([])
+  const [heartBursts, setHeartBursts] = useState<HeartBurst[]>([])
 
   const copy = COPY[language]
 
@@ -373,6 +579,254 @@ export function SilkWeaverStage() {
   useEffect(() => {
     trackingModeRef.current = trackingMode
   }, [trackingMode])
+
+  useEffect(() => {
+    gestureEffectsRef.current = gestureEffects
+  }, [gestureEffects])
+
+  useEffect(() => {
+    audioThresholdsRef.current = audioThresholds
+  }, [audioThresholds])
+
+  useEffect(() => {
+    selectedAudioInputIdRef.current = selectedAudioInputId
+  }, [selectedAudioInputId])
+
+  useEffect(() => {
+    heartBurstSizeRef.current = heartBurstSize
+  }, [heartBurstSize])
+
+  const emitHeartBurst = useCallback((hand: TrackedHand) => {
+    const id = heartBurstIdRef.current
+    heartBurstIdRef.current += 1
+
+    setHeartBursts((current) => [
+      ...current.slice(-5),
+      {
+        id,
+        x: hand.x,
+        y: hand.y,
+        color: getHeartBurstColor(hand.handedness),
+        size: heartBurstSizeRef.current,
+      },
+    ])
+
+    const timeout = window.setTimeout(() => {
+      setHeartBursts((current) => current.filter((heart) => heart.id !== id))
+      screenPulseTimeoutsRef.current = screenPulseTimeoutsRef.current.filter(
+        (activeTimeout) => activeTimeout !== timeout,
+      )
+    }, 900)
+
+    screenPulseTimeoutsRef.current.push(timeout)
+  }, [])
+
+  const updateAudioThreshold = (key: keyof AudioThresholds, value: number) => {
+    setAudioThresholds((current) => ({
+      ...current,
+      [key]: value,
+    }))
+  }
+
+  const refreshAudioInputs = useCallback(async () => {
+    if (!navigator.mediaDevices?.enumerateDevices) {
+      return ''
+    }
+
+    const devices = await navigator.mediaDevices.enumerateDevices()
+    const inputs = devices
+      .filter((device) => device.kind === 'audioinput')
+      .map((device) => ({
+        deviceId: device.deviceId,
+        label: device.label || '(unlabeled input)',
+      }))
+
+    const currentDeviceId = selectedAudioInputIdRef.current
+    const nextDeviceId =
+      currentDeviceId && inputs.some((input) => input.deviceId === currentDeviceId)
+        ? currentDeviceId
+        : (inputs.find((input) => isPreferredAudioInput(input.label))?.deviceId ??
+          inputs[0]?.deviceId ??
+          '')
+
+    setAudioInputs(inputs)
+    selectedAudioInputIdRef.current = nextDeviceId
+    setSelectedAudioInputId(nextDeviceId)
+    return nextDeviceId
+  }, [])
+
+  const teardownAudio = useCallback((resetState: boolean) => {
+    for (const track of audioStreamRef.current?.getTracks() ?? []) {
+      track.stop()
+    }
+
+    audioGainRef.current = null
+    audioProcessorRef.current = null
+    audioStreamRef.current = null
+    lastAudioPeakRef.current = 0
+    lastAudioTransientMsRef.current = 0
+    setAudioMonitor({
+      level: 0,
+      average: 0,
+      attack: 0,
+      transient: false,
+      contextState: resetState ? 'idle' : audioContextRef.current?.state ?? 'idle',
+    })
+    setAudioTrackInfo({
+      label: '-',
+      muted: false,
+      enabled: false,
+      readyState: resetState ? 'idle' : 'ended',
+    })
+
+    if (audioContextRef.current) {
+      void audioContextRef.current.close()
+      audioContextRef.current = null
+    }
+
+    if (resetState) {
+      setSnapAudioState('idle')
+    }
+  }, [])
+
+  const startSnapAudio = useCallback(async (deviceId = selectedAudioInputIdRef.current) => {
+    if (audioProcessorRef.current !== null || snapAudioState === 'requesting') {
+      return
+    }
+
+    try {
+      setSnapAudioState('requesting')
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+          channelCount: 1,
+        },
+        video: false,
+      })
+
+      const context = new AudioContext()
+      const source = context.createMediaStreamSource(stream)
+      const gain = context.createGain()
+      const processor = context.createScriptProcessor(2048, 1, 1)
+      gain.gain.value = 0
+      source.connect(processor)
+      processor.connect(gain)
+      gain.connect(context.destination)
+      await context.resume()
+
+      audioContextRef.current = context
+      audioGainRef.current = gain
+      audioProcessorRef.current = processor
+      audioStreamRef.current = stream
+      const primaryTrack = stream.getAudioTracks()[0]
+      setSnapAudioState(context.state === 'running' ? 'ready' : 'error')
+      await refreshAudioInputs()
+      setAudioTrackInfo({
+        label: primaryTrack?.label || '(unnamed input)',
+        muted: primaryTrack?.muted ?? false,
+        enabled: primaryTrack?.enabled ?? false,
+        readyState: primaryTrack?.readyState ?? 'unknown',
+      })
+
+      processor.onaudioprocess = (event) => {
+        const activeContext = audioContextRef.current
+
+        if (!activeContext) {
+          return
+        }
+
+        const channel = event.inputBuffer.getChannelData(0)
+        let peak = 0
+        let energy = 0
+
+        for (let index = 0; index < channel.length; index += 1) {
+          const sample = channel[index]
+          const magnitude = Math.abs(sample)
+          energy += sample * sample
+          peak = Math.max(peak, magnitude)
+        }
+
+        const rms = Math.sqrt(energy / channel.length)
+        const scaledLevel = Math.min(1, peak * 16 + rms * 24)
+        const scaledAverage = Math.min(1, rms * 18)
+        const attack = scaledLevel - lastAudioPeakRef.current
+        const now = performance.now()
+        const thresholds = audioThresholdsRef.current
+        const transientDetected =
+          scaledLevel > thresholds.level &&
+          scaledAverage < thresholds.average &&
+          attack > thresholds.attack &&
+          now - lastAudioTransientMsRef.current > thresholds.cooldownMs
+
+        setAudioMonitor({
+          level: scaledLevel,
+          average: scaledAverage,
+          attack,
+          transient: transientDetected,
+          contextState: activeContext.state,
+        })
+        setAudioTrackInfo({
+          label: primaryTrack?.label || '(unnamed input)',
+          muted: primaryTrack?.muted ?? false,
+          enabled: primaryTrack?.enabled ?? false,
+          readyState: primaryTrack?.readyState ?? 'unknown',
+        })
+
+        if (transientDetected) {
+          lastAudioTransientMsRef.current = now
+
+          const bestHand = trackedHandsForAudioRef.current
+            .filter((hand) => hand.confidence >= 0.35)
+            .sort((left, right) => right.confidence - left.confidence)[0]
+
+          if (bestHand) {
+            emitHeartBurst(bestHand)
+          }
+        }
+
+        lastAudioPeakRef.current = scaledLevel * 0.42 + lastAudioPeakRef.current * 0.58
+      }
+    } catch (error) {
+      setSnapAudioState(
+        error instanceof DOMException && error.name === 'NotAllowedError' ? 'denied' : 'error',
+      )
+      teardownAudio(false)
+    }
+  }, [emitHeartBurst, refreshAudioInputs, snapAudioState, teardownAudio])
+
+  useEffect(() => {
+    if (gestureEffects.snapHeart && snapAudioState === 'idle') {
+      const timeout = window.setTimeout(() => {
+        void (async () => {
+          const deviceId = await refreshAudioInputs()
+          await startSnapAudio(deviceId)
+        })()
+      }, 0)
+
+      return () => {
+        window.clearTimeout(timeout)
+      }
+    }
+  }, [gestureEffects.snapHeart, refreshAudioInputs, snapAudioState, startSnapAudio])
+
+  useEffect(() => {
+    return () => {
+      for (const timeout of screenPulseTimeoutsRef.current) {
+        window.clearTimeout(timeout)
+      }
+
+      for (const track of audioStreamRef.current?.getTracks() ?? []) {
+        track.stop()
+      }
+
+      if (audioContextRef.current) {
+        void audioContextRef.current.close()
+      }
+    }
+  }, [])
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -411,6 +865,7 @@ export function SilkWeaverStage() {
   const openTuning = () => {
     setHelpOpen(false)
     setTuningOpen(true)
+    void refreshAudioInputs()
   }
 
   const updateTuning = (key: keyof FluidTuning, value: number) => {
@@ -430,6 +885,66 @@ export function SilkWeaverStage() {
   const resetTuning = () => {
     setActivePreset('Silk')
     setTuning({ ...DEFAULT_FLUID_TUNING })
+    setHeartBurstSize(DEFAULT_HEART_BURST_SIZE)
+  }
+
+  const emitScreenPulse = (hand: TrackedHand) => {
+    const colors = getScreenPulseColors(hand.handedness)
+    const id = screenPulseIdRef.current
+    screenPulseIdRef.current += 1
+
+    setScreenPulses((current) => [
+      ...current.slice(-2),
+      {
+        id,
+        x: hand.x,
+        y: hand.y,
+        primary: colors.primary,
+        secondary: colors.secondary,
+      },
+    ])
+
+    const timeout = window.setTimeout(() => {
+      setScreenPulses((current) => current.filter((pulse) => pulse.id !== id))
+      screenPulseTimeoutsRef.current = screenPulseTimeoutsRef.current.filter(
+        (activeTimeout) => activeTimeout !== timeout,
+      )
+    }, 380)
+
+    screenPulseTimeoutsRef.current.push(timeout)
+  }
+
+  const toggleGestureEffect = (key: keyof GestureEffects) => {
+    if (key === 'snapHeart') {
+      if (gestureEffects.snapHeart) {
+        teardownAudio(true)
+        setGestureEffects((current) => ({
+          ...current,
+          snapHeart: false,
+        }))
+        return
+      }
+
+      setGestureEffects((current) => ({
+        ...current,
+        snapHeart: true,
+      }))
+      return
+    }
+
+    setGestureEffects((current) => ({
+      ...current,
+      [key]: !current[key],
+    }))
+  }
+
+  const handleAudioInputChange = (deviceId: string) => {
+    setSelectedAudioInputId(deviceId)
+
+    if (gestureEffects.snapHeart) {
+      teardownAudio(false)
+      void startSnapAudio(deviceId)
+    }
   }
 
   const syncMouseHands = (event: ReactPointerEvent<HTMLElement>) => {
@@ -508,7 +1023,27 @@ export function SilkWeaverStage() {
       const simulatedHands = mouseModeRef.current
         ? mouseSimulatorRef.current.getHands(time)
         : []
-      fluidEngine?.step(dt, [...trackedHands, ...simulatedHands])
+
+      const processedTrackedHands = trackedHands.map((hand) => ({
+        ...hand,
+        pulse: gestureEffectsRef.current.fistPulse ? hand.pulse : false,
+        snap: false,
+      }))
+
+      trackedHandsForAudioRef.current = processedTrackedHands
+
+      for (const hand of processedTrackedHands) {
+        if (hand.pulse) {
+          emitScreenPulse(hand)
+        }
+      }
+
+      fluidEngine?.step(dt, [...processedTrackedHands, ...simulatedHands])
+
+      trackedHands = trackedHands.map((hand) =>
+        hand.pulse ? { ...hand, pulse: false } : hand,
+      )
+
       animationFrame = window.requestAnimationFrame(animate)
     }
 
@@ -616,6 +1151,36 @@ export function SilkWeaverStage() {
       onContextMenu={mouseMode ? (event) => event.preventDefault() : undefined}
     >
       <canvas ref={canvasRef} className="silk-weaver__canvas" aria-hidden="true" />
+
+      <div className="silk-weaver__screen-pulses" aria-hidden="true">
+        {screenPulses.map((pulse) => (
+          <div
+            key={pulse.id}
+            className="silk-weaver__screen-pulse"
+            style={{
+              '--pulse-x': `${(pulse.x * 100).toFixed(2)}%`,
+              '--pulse-y': `${((1 - pulse.y) * 100).toFixed(2)}%`,
+              '--pulse-primary': pulse.primary,
+              '--pulse-secondary': pulse.secondary,
+            } as CSSProperties}
+          />
+        ))}
+
+        {heartBursts.map((heart) => (
+          <div
+            key={heart.id}
+            className="silk-weaver__heart-burst"
+            style={{
+              '--heart-x': `${(heart.x * 100).toFixed(2)}%`,
+              '--heart-y': `${((1 - heart.y) * 100).toFixed(2)}%`,
+              '--heart-color': heart.color,
+              '--heart-size': `${heart.size.toFixed(1)}rem`,
+            } as CSSProperties}
+          >
+            ♥
+          </div>
+        ))}
+      </div>
 
       <div className="silk-weaver__intro" aria-hidden="true">
         <span className="silk-weaver__intro-text">by week</span>
@@ -780,6 +1345,160 @@ export function SilkWeaverStage() {
               <button type="button" className="silk-weaver__ghost-button" onClick={resetTuning}>
                 {copy.buttons.reset}
               </button>
+            </div>
+
+            <div className="silk-weaver__effect-panel">
+              <p className="silk-weaver__effect-title">{copy.effects.title}</p>
+              <div className="silk-weaver__preset-row">
+                <button
+                  type="button"
+                  className={`silk-weaver__preset ${gestureEffects.fistPulse ? 'is-active' : ''}`}
+                  onClick={() => toggleGestureEffect('fistPulse')}
+                >
+                  {copy.effects.fistPulse}
+                </button>
+                <button
+                  type="button"
+                  className={`silk-weaver__preset ${gestureEffects.snapHeart ? 'is-active' : ''}`}
+                  onClick={() => toggleGestureEffect('snapHeart')}
+                >
+                  {copy.effects.snapHeart}
+                </button>
+              </div>
+              <p className="silk-weaver__effect-note">{copy.effects.micStatus[snapAudioState]}</p>
+
+              <div className="silk-weaver__audio-device-row">
+                <label className="silk-weaver__audio-device-label">
+                  <span>{copy.effects.deviceLabel}</span>
+                  <select
+                    className="silk-weaver__audio-select"
+                    value={selectedAudioInputId}
+                    onChange={(event) => handleAudioInputChange(event.currentTarget.value)}
+                  >
+                    <option value="">{copy.effects.devicePlaceholder}</option>
+                    {audioInputs.map((input) => (
+                      <option key={input.deviceId} value={input.deviceId}>
+                        {input.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <button
+                  type="button"
+                  className="silk-weaver__ghost-button"
+                  onClick={() => void refreshAudioInputs()}
+                >
+                  {copy.effects.refreshDevices}
+                </button>
+              </div>
+
+              <div className="silk-weaver__audio-meter">
+                <div className="silk-weaver__audio-meter-row">
+                  <span>{copy.effects.meterLabel}</span>
+                  <strong>{Math.round(audioMonitor.level * 100)}%</strong>
+                </div>
+
+                <div className="silk-weaver__audio-track" aria-hidden="true">
+                  <div
+                    className={`silk-weaver__audio-fill ${audioMonitor.transient ? 'is-hot' : ''}`}
+                    style={{ width: `${Math.min(audioMonitor.level * 100, 100)}%` }}
+                  />
+                  <div
+                    className="silk-weaver__audio-threshold"
+                    style={{ left: `${Math.min(audioThresholds.level * 100, 100)}%` }}
+                  />
+                </div>
+
+                <div className="silk-weaver__audio-meta">
+                  <span>{audioMonitor.transient ? copy.effects.transientReady : copy.effects.transientIdle}</span>
+                  <span>{`ctx ${audioMonitor.contextState} / atk ${audioMonitor.attack.toFixed(3)} / avg ${audioMonitor.average.toFixed(3)}`}</span>
+                </div>
+
+                <div className="silk-weaver__audio-meta">
+                  <span>{copy.effects.trackLabel}</span>
+                  <span>{`${audioTrackInfo.label} / muted ${String(audioTrackInfo.muted)} / enabled ${String(audioTrackInfo.enabled)} / ${audioTrackInfo.readyState}`}</span>
+                </div>
+              </div>
+
+              <div className="silk-weaver__threshold-panel">
+                <p className="silk-weaver__effect-title">{copy.effects.thresholdTitle}</p>
+
+                <label className="silk-weaver__control">
+                  <span className="silk-weaver__control-row">
+                    <span>{copy.effects.heartSize}</span>
+                    <strong>{heartBurstSize.toFixed(1)}rem</strong>
+                  </span>
+                  <input
+                    type="range"
+                    min="2.4"
+                    max="6"
+                    step="0.1"
+                    value={heartBurstSize}
+                    onChange={(event) => setHeartBurstSize(Number(event.currentTarget.value))}
+                  />
+                </label>
+
+                <label className="silk-weaver__control">
+                  <span className="silk-weaver__control-row">
+                    <span>{copy.effects.thresholdLabels.level}</span>
+                    <strong>{audioThresholds.level.toFixed(2)}</strong>
+                  </span>
+                  <input
+                    type="range"
+                    min="0.04"
+                    max="0.7"
+                    step="0.01"
+                    value={audioThresholds.level}
+                    onChange={(event) => updateAudioThreshold('level', Number(event.currentTarget.value))}
+                  />
+                </label>
+
+                <label className="silk-weaver__control">
+                  <span className="silk-weaver__control-row">
+                    <span>{copy.effects.thresholdLabels.average}</span>
+                    <strong>{audioThresholds.average.toFixed(2)}</strong>
+                  </span>
+                  <input
+                    type="range"
+                    min="0.08"
+                    max="1"
+                    step="0.01"
+                    value={audioThresholds.average}
+                    onChange={(event) => updateAudioThreshold('average', Number(event.currentTarget.value))}
+                  />
+                </label>
+
+                <label className="silk-weaver__control">
+                  <span className="silk-weaver__control-row">
+                    <span>{copy.effects.thresholdLabels.attack}</span>
+                    <strong>{audioThresholds.attack.toFixed(2)}</strong>
+                  </span>
+                  <input
+                    type="range"
+                    min="0.01"
+                    max="0.3"
+                    step="0.005"
+                    value={audioThresholds.attack}
+                    onChange={(event) => updateAudioThreshold('attack', Number(event.currentTarget.value))}
+                  />
+                </label>
+
+                <label className="silk-weaver__control">
+                  <span className="silk-weaver__control-row">
+                    <span>{copy.effects.thresholdLabels.cooldownMs}</span>
+                    <strong>{`${Math.round(audioThresholds.cooldownMs)}ms`}</strong>
+                  </span>
+                  <input
+                    type="range"
+                    min="60"
+                    max="600"
+                    step="10"
+                    value={audioThresholds.cooldownMs}
+                    onChange={(event) => updateAudioThreshold('cooldownMs', Number(event.currentTarget.value))}
+                  />
+                </label>
+              </div>
             </div>
 
             <div className="silk-weaver__preset-row">

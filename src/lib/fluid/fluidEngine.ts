@@ -52,6 +52,18 @@ function assertResource<T>(resource: T | null, message: string): T {
   return resource
 }
 
+function getPulseColors(handedness: Handedness) {
+  return handedness === 'Left'
+    ? {
+        core: [1.0, 0.8, 0.62] as const,
+        ring: [0.96, 0.54, 0.38] as const,
+      }
+    : {
+        core: [0.76, 1.0, 1.1] as const,
+        ring: [0.42, 0.84, 1.04] as const,
+      }
+}
+
 export class FluidEngine {
   private readonly canvas: HTMLCanvasElement
 
@@ -238,6 +250,7 @@ export class FluidEngine {
 
     this.runCurl(resources.velocity.read.texture, resources.curl)
     this.runVorticity(resources.velocity, resources.curl.texture, dt)
+    this.injectHandPulses(hands)
     this.injectPoints(injectionPoints)
 
     if (!hasInput) {
@@ -406,6 +419,84 @@ export class FluidEngine {
         baseColor[1] * intensity,
         baseColor[2] * intensity,
       ], radius * 0.76)
+    }
+  }
+
+  private injectHandPulses(hands: TrackedHand[]) {
+    const resources = this.resources
+
+    if (!resources) {
+      return
+    }
+
+    const aspect = this.width / this.height
+    const time = this.elapsedTime
+
+    for (const hand of hands) {
+      if (!hand.pulse || hand.confidence < 0.35) {
+        continue
+      }
+
+      const pulseStrength = 0.95 + hand.fistStrength * 0.62
+      const baseRadius = Math.max(this.tuning.splatRadius * 3.1, 0.013)
+      const innerRingDistance = baseRadius * 2.4
+      const outerRingDistance = baseRadius * 4.2
+      const baseColor = HAND_COLORS[hand.handedness]
+      const pulseColors = getPulseColors(hand.handedness)
+      const direction = hand.handedness === 'Left' ? -1 : 1
+      const phase = time * 2.1 * direction
+
+      this.runSplat(resources.velocity, hand.x, hand.y, [
+        hand.vx * this.tuning.splatVelocity * 0.44 * pulseStrength,
+        hand.vy * this.tuning.splatVelocity * 0.44 * pulseStrength,
+        0,
+      ], baseRadius * 1.18)
+
+      this.runSplat(resources.dye, hand.x, hand.y, [
+        pulseColors.core[0] * this.tuning.colorIntensity * 2.2 * pulseStrength,
+        pulseColors.core[1] * this.tuning.colorIntensity * 2.2 * pulseStrength,
+        pulseColors.core[2] * this.tuning.colorIntensity * 2.2 * pulseStrength,
+      ], baseRadius * 1.26)
+
+      this.runSplat(resources.dye, hand.x, hand.y, [
+        baseColor[0] * this.tuning.colorIntensity * 1.08 * pulseStrength,
+        baseColor[1] * this.tuning.colorIntensity * 1.08 * pulseStrength,
+        baseColor[2] * this.tuning.colorIntensity * 1.08 * pulseStrength,
+      ], baseRadius * 0.74)
+
+      for (let index = 0; index < 8; index += 1) {
+        const angle = phase + (Math.PI * 2 * index) / 8
+        const offsetX = (Math.cos(angle) * innerRingDistance) / aspect
+        const offsetY = Math.sin(angle) * innerRingDistance
+        const px = clamp(hand.x + offsetX, 0, 1)
+        const py = clamp(hand.y + offsetY, 0, 1)
+        const tangentX = -Math.sin(angle) * this.tuning.splatVelocity * 0.34 * pulseStrength
+        const tangentY = Math.cos(angle) * this.tuning.splatVelocity * 0.34 * pulseStrength
+
+        this.runSplat(resources.velocity, px, py, [tangentX, tangentY, 0], baseRadius * 0.96)
+        this.runSplat(resources.dye, px, py, [
+          pulseColors.ring[0] * this.tuning.colorIntensity * 1.72 * pulseStrength,
+          pulseColors.ring[1] * this.tuning.colorIntensity * 1.72 * pulseStrength,
+          pulseColors.ring[2] * this.tuning.colorIntensity * 1.72 * pulseStrength,
+        ], baseRadius * 0.88)
+      }
+
+      for (let index = 0; index < 10; index += 1) {
+        const angle = -phase + (Math.PI * 2 * index) / 10
+        const offsetX = (Math.cos(angle) * outerRingDistance) / aspect
+        const offsetY = Math.sin(angle) * outerRingDistance
+        const px = clamp(hand.x + offsetX, 0, 1)
+        const py = clamp(hand.y + offsetY, 0, 1)
+        const tangentX = -Math.sin(angle) * this.tuning.splatVelocity * 0.18 * pulseStrength
+        const tangentY = Math.cos(angle) * this.tuning.splatVelocity * 0.18 * pulseStrength
+
+        this.runSplat(resources.velocity, px, py, [tangentX, tangentY, 0], baseRadius * 0.7)
+        this.runSplat(resources.dye, px, py, [
+          pulseColors.core[0] * this.tuning.colorIntensity * 0.82 * pulseStrength,
+          pulseColors.core[1] * this.tuning.colorIntensity * 0.82 * pulseStrength,
+          pulseColors.core[2] * this.tuning.colorIntensity * 0.82 * pulseStrength,
+        ], baseRadius * 0.56)
+      }
     }
   }
 

@@ -5,6 +5,9 @@ export interface HandSample {
   x: number
   y: number
   confidence: number
+  fistStrength: number
+  pulse: boolean
+  snap: boolean
 }
 
 export interface SmoothedHand {
@@ -15,6 +18,9 @@ export interface SmoothedHand {
   vy: number
   speed: number
   confidence: number
+  fistStrength: number
+  pulse: boolean
+  snap: boolean
 }
 
 interface HandState {
@@ -97,6 +103,9 @@ export class HandMotionSmoother {
           vy: 0,
           speed: 0,
           confidence: sample.confidence,
+          fistStrength: sample.fistStrength,
+          pulse: sample.pulse,
+          snap: sample.snap,
         })
         continue
       }
@@ -135,6 +144,9 @@ export class HandMotionSmoother {
         vy,
         speed: Math.hypot(vx, vy),
         confidence: sample.confidence,
+        fistStrength: sample.fistStrength,
+        pulse: sample.pulse,
+        snap: sample.snap,
       })
     }
 

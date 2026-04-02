@@ -45,6 +45,9 @@ export class MouseHandSimulator {
         vy,
         speed: stale ? 0 : Math.hypot(vx, vy),
         confidence: 1,
+        fistStrength: 0,
+        pulse: false,
+        snap: false,
       })
     }
 
