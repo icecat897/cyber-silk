@@ -80,6 +80,21 @@ interface AudioInputOption {
   label: string
 }
 
+type StartupIssueKind =
+  | 'webgl'
+  | 'float'
+  | 'cameraDenied'
+  | 'cameraMissing'
+  | 'cameraBusy'
+  | 'model'
+  | 'generic'
+
+interface StartupErrorCopy {
+  title: string
+  detailLabel: string
+  tips: Record<StartupIssueKind, string[]>
+}
+
 interface LanguageCopy {
   brand: string
   status: Record<StageMessageKey, string>
@@ -143,6 +158,7 @@ interface LanguageCopy {
     tips: string[]
     footer: string
   }
+  startupError: StartupErrorCopy
 }
 
 const PRESET_KEYS = Object.keys(FLUID_TUNING_PRESETS) as PresetKey[]
@@ -314,6 +330,40 @@ const COPY: Record<Language, LanguageCopy> = {
       ],
       footer: '快捷键：按 H 打开玩法说明，按 T 打开调参面板，按 M 切换鼠标模拟，按 Esc 关闭当前面板。',
     },
+    startupError: {
+      title: '当前设备没有成功启动 Silk 舞台',
+      detailLabel: '技术信息',
+      tips: {
+        webgl: [
+          '当前浏览器不支持 WebGL2，建议改用最新版 Chrome 或 Edge。',
+          '如果你是在微信内置浏览器、远程桌面或虚拟机里打开，换到本机浏览器再试。',
+        ],
+        float: [
+          '浏览器很可能关闭了硬件加速，请在设置里开启“使用硬件加速”后重启浏览器。',
+          '如果还是不行，通常是显卡驱动过旧，或当前设备不支持这个 WebGL 浮点渲染能力。',
+        ],
+        cameraDenied: [
+          '页面需要摄像头权限来追踪手势，请在地址栏里允许摄像头访问后刷新页面。',
+          '如果暂时不方便开摄像头，也可以先打开“鼠标模拟”体验交互。',
+        ],
+        cameraMissing: [
+          '浏览器没有找到可用摄像头，请确认电脑接了摄像头，或者系统里没有禁用它。',
+          '外接摄像头时，重新插拔后刷新页面通常更稳。',
+        ],
+        cameraBusy: [
+          '摄像头可能正被别的软件占用，比如会议软件、录像软件或另一个浏览器标签页。',
+          '关闭占用摄像头的软件后刷新页面，再重新授权。',
+        ],
+        model: [
+          '手势模型资源没有正常加载，可能是网络拦截、缓存异常或部署资源缺失。',
+          '请先强制刷新页面；如果问题仍在，换个网络或稍后再试。',
+        ],
+        generic: [
+          '请先刷新页面重试一次。',
+          '如果还是只有 UI 没有流动背景，优先检查浏览器是否开启了硬件加速，并改用最新版 Chrome 或 Edge。',
+        ],
+      },
+    },
   },
   en: {
     brand: 'The Silk Weaver',
@@ -454,6 +504,40 @@ const COPY: Record<Language, LanguageCopy> = {
       ],
       footer: 'Hotkeys: press H for help, T for tuning, M for mouse simulation, and Esc to close the current panel.',
     },
+    startupError: {
+      title: 'This device did not start the Silk stage correctly',
+      detailLabel: 'Technical detail',
+      tips: {
+        webgl: [
+          'This browser does not support WebGL2. Try the latest Chrome or Edge.',
+          'If you opened this inside an embedded browser, remote desktop session, or virtual machine, switch to a local desktop browser.',
+        ],
+        float: [
+          'Hardware acceleration is likely disabled. Turn it on in browser settings and restart the browser.',
+          'If the problem remains, the device or graphics driver may not support the required floating-point WebGL rendering path.',
+        ],
+        cameraDenied: [
+          'Camera permission is required for hand tracking. Allow camera access in the address bar and reload the page.',
+          'If camera access is not available right now, you can still try the experience with Mouse sim.',
+        ],
+        cameraMissing: [
+          'No usable camera was found. Make sure the computer has a camera connected and enabled at the system level.',
+          'If you use an external camera, reconnect it and reload the page.',
+        ],
+        cameraBusy: [
+          'The camera is probably in use by another app such as a meeting tool, recorder, or another browser tab.',
+          'Close the other app, then reload and grant permission again.',
+        ],
+        model: [
+          'The hand-tracking model did not load correctly. This can be caused by missing deployment assets, cache problems, or network blocking.',
+          'Try a hard refresh first. If it still fails, switch networks or try again later.',
+        ],
+        generic: [
+          'Reload the page and try again once.',
+          'If the UI appears but the background stays completely still, first check hardware acceleration and try the latest Chrome or Edge.',
+        ],
+      },
+    },
   },
 }
 
@@ -463,6 +547,54 @@ function formatError(error: unknown) {
   }
 
   return 'Unknown startup error'
+}
+
+function detectStartupIssue(errorMessage?: string): StartupIssueKind {
+  const message = errorMessage?.toLowerCase() ?? ''
+
+  if (message.includes('webgl2 is unavailable')) {
+    return 'webgl'
+  }
+
+  if (
+    message.includes('float render targets are unavailable') ||
+    message.includes('hardware acceleration') ||
+    message.includes('framebuffer is incomplete')
+  ) {
+    return 'float'
+  }
+
+  if (message.includes('notallowederror') || message.includes('permission denied')) {
+    return 'cameraDenied'
+  }
+
+  if (
+    message.includes('notfounderror') ||
+    message.includes('requested device not found') ||
+    message.includes('overconstrainederror')
+  ) {
+    return 'cameraMissing'
+  }
+
+  if (
+    message.includes('notreadableerror') ||
+    message.includes('trackstarterror') ||
+    message.includes('could not start video source') ||
+    message.includes('device in use')
+  ) {
+    return 'cameraBusy'
+  }
+
+  if (
+    message.includes('mediapipe') ||
+    message.includes('hand landmark') ||
+    message.includes('wasm') ||
+    message.includes('fetch')
+  ) {
+    return 'model'
+  }
+
+  return 'generic'
 }
 
 function formatTuningValue(key: keyof FluidTuning, value: number) {
@@ -562,6 +694,11 @@ export function SilkWeaverStage() {
 
     return copy.status[stageState.key]
   }, [copy, stageState])
+
+  const startupIssue = useMemo(
+    () => detectStartupIssue(stageState.errorMessage),
+    [stageState.errorMessage],
+  )
 
   useEffect(() => {
     tuningRef.current = tuning
@@ -1254,6 +1391,19 @@ export function SilkWeaverStage() {
           </button>
         </div>
       </section>
+
+      {stageState.mode === 'error' ? (
+        <section className="silk-weaver__error-panel" role="alert" aria-live="assertive">
+          <p className="silk-weaver__error-title">{copy.startupError.title}</p>
+          <p className="silk-weaver__error-detail-label">{copy.startupError.detailLabel}</p>
+          <p className="silk-weaver__error-detail">{stageState.errorMessage ?? copy.status.error}</p>
+          <div className="silk-weaver__error-tips">
+            {copy.startupError.tips[startupIssue].map((tip) => (
+              <p key={tip}>{tip}</p>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <p className="silk-weaver__credit">created by week&amp;AI</p>
 
